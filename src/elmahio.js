@@ -758,6 +758,14 @@
         return Object.prototype.toString.call(what) === '[object String]';
     }
 
+    function isSelectorUnique(selector) {
+        try {
+            return document.querySelectorAll(selector).length === 1;
+        } catch (e) {
+            return false;
+        }
+    }
+
     function cssSelectorString(elem) {
         var MAX_TRAVERSE_HEIGHT = 5,
             MAX_OUTPUT_LEN = 80,
@@ -767,15 +775,28 @@
             separator = ' > ',
             sepLength = separator.length,
             nextStr;
+        
         while (elem && height++ < MAX_TRAVERSE_HEIGHT) {
             nextStr = htmlElementAsString(elem);
+
             if (nextStr === 'html' || (height > 1 && len + out.length * sepLength + nextStr.length >= MAX_OUTPUT_LEN)) {
                 break;
             }
+
             out.push(nextStr);
             len += nextStr.length;
+
+            var currentSelector = out.slice().reverse().join(separator);
+            if (isSelectorUnique(currentSelector)) {
+                break;
+            }
+            if (elem.id) {
+                break;
+            }
+
             elem = elem.parentNode;
         }
+
         return out.reverse().join(separator);
     }
       
@@ -795,6 +816,7 @@
                 out.push('.' + classes[i]);
             }
         }
+
         var attrWhitelist = ['type', 'name', 'title', 'alt'];
         for (i = 0; i < attrWhitelist.length; i++) {
             key = attrWhitelist[i];
@@ -803,6 +825,26 @@
                 out.push('[' + key + '="' + attr + '"]');
             }
         }
+
+        var parent = elem.parentNode;
+        if (parent) {
+            var siblings = Array.prototype.filter.call(parent.children, function(c) {
+                return c.tagName === elem.tagName;
+            });
+            if (siblings.length > 1) {
+                var index = Array.prototype.indexOf.call(siblings, elem) + 1;
+                out.push(':nth-of-type(' + index + ')');
+            }
+        }
+
+        var interactiveTags = ['button', 'a', 'label'];
+        if (interactiveTags.indexOf(elem.tagName.toLowerCase()) !== -1) {
+            var text = (elem.innerText || elem.textContent || '').trim().substring(0, 30);
+            if (text) {
+                out.push('[text="' + text + '"]');
+            }
+        }
+
         return out.join('');
     }
 
@@ -1218,16 +1260,18 @@
         var breadcrumbXHRHandler = function(evt, method, url) {
             var status = evt && evt.target ? evt.target.status : 0,
                 severity = null,
-                method = method.toUpperCase(),
+                theMethod = method.toUpperCase(),
                 url = url,
-                regex = /https:\/\/api.elmah.io/g;
+                regex = /https:\/\/api\.elmah.io/g;
 
             if(url.match(regex) == null) { 
-                if (status > 0 && status < 400) {
+                if (status === 0) {
+                    severity = "Error";
+                } else if (status < 400) {
                     severity = "Information";
-                } else if (status > 399 && status < 500) {
+                } else if (status < 500) {
                     severity = "Warning";
-                } else if (status >= 500) {
+                } else {
                     severity = "Error";
                 }
 
@@ -1236,7 +1280,7 @@
                 recordBreadcrumb({
                     "severity": severity,
                     "action": "Request",
-                    "message": "[" + method + "] " + url + statusCode
+                    "message": "[" + theMethod + "] " + url + statusCode
                 });
             }
         }
@@ -1751,18 +1795,35 @@
                     window.attachEvent('hashchange', breadcrumbHashChangeEventHandler, false);
                 }
 
-                if(window.history && window.history.pushState && window.history.replaceState) {
-                    var old_onpopstate = window.onpopstate;
-                    window.onpopstate = function(evt) {
+                if (window.history && window.history.pushState && window.history.replaceState) {
+                    // browser back / forward button
+                    window.addEventListener('popstate', function(evt) {
                         breadcrumbWindowEventHandler(evt);
-                        if (old_onpopstate) {
-                            return old_onpopstate.apply(this, arguments);
-                        }
+                    });
+
+                    var originalPushState = history.pushState;
+                    history.pushState = function(state, title, url) {
+                        originalPushState.apply(this, arguments);
+                        recordBreadcrumb({
+                            "severity": "Information",
+                            "action": "Navigation",
+                            "message": "Navigation to: '" + (url || window.location.href) + "'"
+                        });
+                    };
+
+                    var originalReplaceState = history.replaceState;
+                    history.replaceState = function(state, title, url) {
+                        originalReplaceState.apply(this, arguments);
+                        recordBreadcrumb({
+                            "severity": "Information",
+                            "action": "Navigation",
+                            "message": "Navigation replaced to: '" + (url || window.location.href) + "'"
+                        });
                     };
                 }
 
                 // Breadcrumbs - XHR
-                if(window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
+                if (window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
                     // Store a reference to the native method
                     var open = XMLHttpRequest.prototype.open;
                     
