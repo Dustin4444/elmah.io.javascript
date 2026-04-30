@@ -826,23 +826,23 @@
             }
         }
 
+        var interactiveTags = ['a', 'button', 'label'];
+        var isInteractive = interactiveTags.indexOf(elem.tagName.toLowerCase()) !== -1;
+        var text = isInteractive ? (elem.innerText || elem.textContent || '').trim().substring(0, 30) : '';
+
         var parent = elem.parentNode;
         if (parent) {
             var siblings = Array.prototype.filter.call(parent.children, function(c) {
                 return c.tagName === elem.tagName;
             });
-            if (siblings.length > 1) {
+            if (siblings.length > 1 && !(isInteractive && text)) {
                 var index = Array.prototype.indexOf.call(siblings, elem) + 1;
                 out.push(':nth-of-type(' + index + ')');
             }
         }
 
-        var interactiveTags = ['button', 'a', 'label'];
-        if (interactiveTags.indexOf(elem.tagName.toLowerCase()) !== -1) {
-            var text = (elem.innerText || elem.textContent || '').trim().substring(0, 30);
-            if (text) {
-                out.push('[text="' + text + '"]');
-            }
+        if (isInteractive && text) {
+            out.push('[text="' + text + '"]');
         }
 
         return out.join('');
@@ -1183,7 +1183,12 @@
         var breadcrumbClickEventHandler = function(evt) {
             var target;
             try {
-                target = cssSelectorString(evt.target);
+                var interactiveTags = ['a', 'button', 'label'];
+                var elem = evt.target;
+                while (elem && elem.tagName && interactiveTags.indexOf(elem.tagName.toLowerCase()) === -1) {
+                    elem = elem.parentNode;
+                }
+                target = cssSelectorString(elem && elem.tagName ? elem : evt.target);
             } catch (e) {
                 target = "<unknown_target>";
             }
