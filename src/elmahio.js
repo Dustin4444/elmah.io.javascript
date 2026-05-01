@@ -833,7 +833,7 @@
         var parent = elem.parentNode;
         if (parent) {
             var siblings = Array.prototype.filter.call(parent.children, function(c) {
-                return c.tagName === elem.tagName;
+                return c.tagName === elem.tagName && c.className === elem.className;
             });
             if (siblings.length > 1 && !(isInteractive && text)) {
                 var index = Array.prototype.indexOf.call(siblings, elem) + 1;
@@ -841,8 +841,14 @@
             }
         }
 
+        // a, button and label
         if (isInteractive && text) {
             out.push('[text="' + text + '"]');
+        }
+
+        // select tag
+        if (elem.tagName.toLowerCase() === 'select' && elem.value) {
+            out.push('[value="' + elem.value + '"]');
         }
 
         return out.join('');
