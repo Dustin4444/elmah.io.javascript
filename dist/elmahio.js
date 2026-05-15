@@ -1137,22 +1137,40 @@
     return Object.prototype.toString.call(what) === '[object String]';
   }
 
+  function isSelectorUnique(selector) {
+    try {
+      return document.querySelectorAll(selector).length === 1;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function cssSelectorString(elem) {
     var MAX_TRAVERSE_HEIGHT = 5,
-      MAX_OUTPUT_LEN = 80,
+      MAX_OUTPUT_LEN = 150,
       out = [],
       height = 0,
       len = 0,
       separator = ' > ',
       sepLength = separator.length,
       nextStr;
-    while (elem && height++ < MAX_TRAVERSE_HEIGHT) {
+    while (elem && elem.tagName && height++ < MAX_TRAVERSE_HEIGHT) {
       nextStr = htmlElementAsString(elem);
       if (nextStr === 'html' || (height > 1 && len + out.length * sepLength + nextStr.length >= MAX_OUTPUT_LEN)) {
         break;
       }
       out.push(nextStr);
       len += nextStr.length;
+      if (elem.id) {
+        break;
+      }
+      var MIN_CONTEXT = 3;
+      if (out.length >= MIN_CONTEXT) {
+        var currentSelector = out.slice().reverse().join(separator);
+        if (isSelectorUnique(currentSelector)) {
+          break;
+        }
+      }
       elem = elem.parentNode;
     }
     return out.reverse().join(separator);
@@ -1165,23 +1183,61 @@
       return '';
     }
     out.push(elem.tagName.toLowerCase());
-    if (elem.id) {
-      out.push('#' + elem.id);
-    }
-    className = elem.className;
-    if (className && isString(className)) {
-      classes = className.split(/\s+/);
-      for (i = 0; i < classes.length; i++) {
-        out.push('.' + classes[i]);
+    var keyAttrs = ['data-testid', 'data-id', 'data-cy', 'data-track'];
+    if (keyAttrs && keyAttrs.length) {
+      for (i = 0; i < keyAttrs.length; i++) {
+        attr = elem.getAttribute(keyAttrs[i]);
+        if (attr) {
+          out.push('[' + keyAttrs[i] + '="' + attr + '"]');
+          return out.join('');
+        }
       }
     }
-    var attrWhitelist = ['type', 'name', 'title', 'alt'];
+    var hasId = !!elem.id;
+    if (hasId) {
+      out.push('#' + elem.id);
+    }
+    var interactiveTags = ['a', 'button', 'label'];
+    var isInteractive = interactiveTags.indexOf(elem.tagName.toLowerCase()) !== -1;
+    var attrWhitelist = ['type', 'name', 'title', 'alt', 'aria-label'];
+    var labelAttrFound = false;
     for (i = 0; i < attrWhitelist.length; i++) {
       key = attrWhitelist[i];
       attr = elem.getAttribute(key);
       if (attr) {
         out.push('[' + key + '="' + attr + '"]');
+        if (key === 'title' || key === 'aria-label') {
+          labelAttrFound = true;
+          break;
+        }
       }
+    }
+    var text = (isInteractive && !labelAttrFound) ? (elem.innerText || elem.textContent || '').trim().substring(0, 30) : '';
+    var hasIdentifier = labelAttrFound || (isInteractive && text);
+    if (!hasId && !hasIdentifier) {
+      className = elem.className;
+      if (className && isString(className)) {
+        classes = className.split(/\s+/);
+        for (i = 0; i < classes.length; i++) {
+          out.push('.' + classes[i]);
+        }
+      }
+    }
+    var parent = elem.parentNode;
+    if (parent) {
+      var siblings = Array.prototype.filter.call(parent.children, function(c) {
+        return c.tagName === elem.tagName && c.className === elem.className;
+      });
+      if (siblings.length > 1 && !(isInteractive && text)) {
+        var index = Array.prototype.indexOf.call(siblings, elem) + 1;
+        out.push(':nth-of-type(' + index + ')');
+      }
+    }
+    if (isInteractive && text) {
+      out.push('[text="' + text + '"]');
+    }
+    if (elem.tagName.toLowerCase() === 'select' && elem.value) {
+      out.push('[value="' + elem.value + '"]');
     }
     return out.join('');
   }
@@ -1551,7 +1607,13 @@
     var breadcrumbClickEventHandler = function(evt) {
       var target;
       try {
-        target = cssSelectorString(evt.target);
+        var interactiveTags = ['a', 'button', 'label'];
+        var elem = evt.target;
+        while (elem && elem.tagName && elem.tagName.toLowerCase() !== 'body' && interactiveTags.indexOf(elem.tagName.toLowerCase()) === -1) {
+          elem = elem.parentNode;
+        }
+        var resolved = (elem && elem.tagName && elem.tagName.toLowerCase() !== 'body') ? elem : evt.target;
+        target = cssSelectorString(resolved);
       } catch (e) {
         target = "<unknown_target>";
       }
@@ -1623,22 +1685,24 @@
     var breadcrumbXHRHandler = function(evt, method, url) {
       var status = evt && evt.target ? evt.target.status : 0,
         severity = null,
-        method = method.toUpperCase(),
+        theMethod = method.toUpperCase(),
         url = url,
-        regex = /https:\/\/api.elmah.io/g;
+        regex = /https:\/\/api\.elmah.io/g;
       if (url.match(regex) == null) {
-        if (status > 0 && status < 400) {
+        if (status === 0) {
+          severity = "Error";
+        } else if (status < 400) {
           severity = "Information";
-        } else if (status > 399 && status < 500) {
+        } else if (status < 500) {
           severity = "Warning";
-        } else if (status >= 500) {
+        } else {
           severity = "Error";
         }
         var statusCode = status > 0 ? " (" + status + ")" : "";
         recordBreadcrumb({
           "severity": severity,
           "action": "Request",
-          "message": "[" + method + "] " + url + statusCode
+          "message": "[" + theMethod + "] " + url + statusCode
         });
       }
     }
@@ -2047,12 +2111,26 @@
           window.attachEvent('hashchange', breadcrumbHashChangeEventHandler, false);
         }
         if (window.history && window.history.pushState && window.history.replaceState) {
-          var old_onpopstate = window.onpopstate;
-          window.onpopstate = function(evt) {
+          window.addEventListener('popstate', function(evt) {
             breadcrumbWindowEventHandler(evt);
-            if (old_onpopstate) {
-              return old_onpopstate.apply(this, arguments);
-            }
+          });
+          var originalPushState = history.pushState;
+          history.pushState = function(state, title, url) {
+            originalPushState.apply(this, arguments);
+            recordBreadcrumb({
+              "severity": "Information",
+              "action": "Navigation",
+              "message": "Navigation to: '" + (url || window.location.href) + "'"
+            });
+          };
+          var originalReplaceState = history.replaceState;
+          history.replaceState = function(state, title, url) {
+            originalReplaceState.apply(this, arguments);
+            recordBreadcrumb({
+              "severity": "Information",
+              "action": "Navigation",
+              "message": "Navigation replaced to: '" + (url || window.location.href) + "'"
+            });
           };
         }
         if (window.XMLHttpRequest && window.XMLHttpRequest.prototype) {

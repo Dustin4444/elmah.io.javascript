@@ -768,15 +768,15 @@
 
     function cssSelectorString(elem) {
         var MAX_TRAVERSE_HEIGHT = 5,
-            MAX_OUTPUT_LEN = 80,
+            MAX_OUTPUT_LEN = 150,
             out = [],
             height = 0,
             len = 0,
             separator = ' > ',
             sepLength = separator.length,
             nextStr;
-        
-        while (elem && height++ < MAX_TRAVERSE_HEIGHT) {
+
+        while (elem && elem.tagName && height++ < MAX_TRAVERSE_HEIGHT) {
             nextStr = htmlElementAsString(elem);
 
             if (nextStr === 'html' || (height > 1 && len + out.length * sepLength + nextStr.length >= MAX_OUTPUT_LEN)) {
@@ -786,12 +786,18 @@
             out.push(nextStr);
             len += nextStr.length;
 
-            var currentSelector = out.slice().reverse().join(separator);
-            if (isSelectorUnique(currentSelector)) {
-                break;
-            }
+            // stop when the current element has an id
             if (elem.id) {
                 break;
+            }
+
+            // check uniqueness only after we have at least MIN_CONTEXT levels
+            var MIN_CONTEXT = 3;
+            if (out.length >= MIN_CONTEXT) {
+                var currentSelector = out.slice().reverse().join(separator);
+                if (isSelectorUnique(currentSelector)) {
+                    break;
+                }
             }
 
             elem = elem.parentNode;
@@ -806,30 +812,54 @@
             return '';
         }
         out.push(elem.tagName.toLowerCase());
-        if (elem.id) {
-            out.push('#' + elem.id);
-        }
-        className = elem.className;
-        if (className && isString(className)) {
-            classes = className.split(/\s+/);
-            for (i = 0; i < classes.length; i++) {
-                out.push('.' + classes[i]);
+
+        var keyAttrs = ['data-testid', 'data-id', 'data-cy', 'data-track'];
+        if (keyAttrs && keyAttrs.length) {
+            for (i = 0; i < keyAttrs.length; i++) {
+                attr = elem.getAttribute(keyAttrs[i]);
+                if (attr) {
+                    out.push('[' + keyAttrs[i] + '="' + attr + '"]');
+                    return out.join('');
+                }
             }
         }
 
-        var attrWhitelist = ['type', 'name', 'title', 'alt'];
+        var hasId = !!elem.id;
+        if (hasId) {
+            out.push('#' + elem.id);
+        }
+    
+        var interactiveTags = ['a', 'button', 'label'];
+        var isInteractive = interactiveTags.indexOf(elem.tagName.toLowerCase()) !== -1;
+    
+        var attrWhitelist = ['type', 'name', 'title', 'alt', 'aria-label'];
+        var labelAttrFound = false;
         for (i = 0; i < attrWhitelist.length; i++) {
             key = attrWhitelist[i];
             attr = elem.getAttribute(key);
             if (attr) {
                 out.push('[' + key + '="' + attr + '"]');
+                if (key === 'title' || key === 'aria-label') {
+                    labelAttrFound = true;
+                    break;
+                }
             }
         }
-
-        var interactiveTags = ['a', 'button', 'label'];
-        var isInteractive = interactiveTags.indexOf(elem.tagName.toLowerCase()) !== -1;
-        var text = isInteractive ? (elem.innerText || elem.textContent || '').trim().substring(0, 30) : '';
-
+    
+        var text = (isInteractive && !labelAttrFound) ? (elem.innerText || elem.textContent || '').trim().substring(0, 30) : '';
+    
+        // skip classes if element has an id or a semantic identifier
+        var hasIdentifier = labelAttrFound || (isInteractive && text);
+        if (!hasId && !hasIdentifier) {
+            className = elem.className;
+            if (className && isString(className)) {
+                classes = className.split(/\s+/);
+                for (i = 0; i < classes.length; i++) {
+                    out.push('.' + classes[i]);
+                }
+            }
+        }
+    
         var parent = elem.parentNode;
         if (parent) {
             var siblings = Array.prototype.filter.call(parent.children, function(c) {
@@ -840,17 +870,17 @@
                 out.push(':nth-of-type(' + index + ')');
             }
         }
-
-        // a, button and label
+    
+        // a, button and label — only when no title/aria-label already identifies the element
         if (isInteractive && text) {
             out.push('[text="' + text + '"]');
         }
-
+    
         // select tag
         if (elem.tagName.toLowerCase() === 'select' && elem.value) {
             out.push('[value="' + elem.value + '"]');
         }
-
+    
         return out.join('');
     }
 
@@ -1173,8 +1203,8 @@
   
             breadcrumbs.push(crumb);
   
-            if(options.breadcrumbsNumber >= 0 && typeof options.breadcrumbsNumber === "number" ) {
-                if(options.breadcrumbsNumber > 25) {
+            if (options.breadcrumbsNumber >= 0 && typeof options.breadcrumbsNumber === "number" ) {
+                if (options.breadcrumbsNumber > 25) {
                     breadcrumbs_number = 25;
                 } else if(options.breadcrumbsNumber <= 25) {
                     breadcrumbs_number = options.breadcrumbsNumber;
@@ -1191,10 +1221,12 @@
             try {
                 var interactiveTags = ['a', 'button', 'label'];
                 var elem = evt.target;
-                while (elem && elem.tagName && interactiveTags.indexOf(elem.tagName.toLowerCase()) === -1) {
+                while (elem && elem.tagName && elem.tagName.toLowerCase() !== 'body' && interactiveTags.indexOf(elem.tagName.toLowerCase()) === -1) {
                     elem = elem.parentNode;
                 }
-                target = cssSelectorString(elem && elem.tagName ? elem : evt.target);
+                // if no interactive element found, fall back to the original click target
+                var resolved = (elem && elem.tagName && elem.tagName.toLowerCase() !== 'body') ? elem : evt.target;
+                target = cssSelectorString(resolved);
             } catch (e) {
                 target = "<unknown_target>";
             }
